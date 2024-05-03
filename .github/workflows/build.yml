@@ -17,7 +17,7 @@ jobs:
         os: [windows-latest, ubuntu-latest, macos-latest]
         bits: [32, 64]
         exclude:
-          - os: macos-latest
+          - os: macos-13
             bits: 32
       # max-parallel: 1
     env:
