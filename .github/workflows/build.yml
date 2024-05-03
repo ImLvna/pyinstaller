@@ -1,0 +1,96 @@
+name: Build
+
+on: push
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bootloader
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        bits: [32, 64]
+        exclude:
+          - os: macos-latest
+            bits: 32
+      # max-parallel: 1
+    env:
+      HAS_CHANGED: "false"
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: 3.11
+      - name: Install Gcc
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get install gcc-multilib libghc-zlib-dev zlib1g-dev lib32z1 lib32z1-dev
+      - name: Build Bootloader
+        run: python waf all --target-arch ${{ matrix.bits }}bit
+        working-directory: ./bootloader
+
+      - name: Report issues
+        if: failure()
+        run: cat bootloader/build/config.log
+
+      - name: Copy edited files to a temp dir
+        shell: bash
+        run: |
+          rm -rf temp
+          mkdir temp
+          for file in $(git diff --name-only HEAD); do
+            mkdir -p temp/$(basename $(dirname $file))
+            cp $file temp/$(basename $(dirname $file))/$(basename $file)
+            echo "HAS_CHANGED=true" >> "$GITHUB_ENV"
+          done
+      - name: Upload Bootloader
+        if: env.HAS_CHANGED == 'true'
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.os }}-${{ matrix.bits }}bit
+          path: temp/
+
+  commit-changes:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      HAS_CHANGED: "false"
+    steps:
+      - uses: actions/checkout@v3
+      - name: Download Bootloader
+        uses: actions/download-artifact@v3
+        with:
+          path: temp
+      - name: Check if files changed
+        shell: bash
+        run: |
+          if [ -d "temp" ] 
+          then
+              echo "HAS_CHANGED=true" >> "$GITHUB_ENV"
+          fi
+      - name: Move files
+        if: env.HAS_CHANGED == 'true'
+        shell: bash
+        run: |
+          for _ in $(ls temp); do
+            for file in $(ls temp/$_); do
+              rm -rf PyInstaller/bootloader/$file
+              echo "Removing PyInstaller/bootloader/$file"
+            done
+          done
+          mv temp/*/* PyInstaller/bootloader
+      - name: Delete temporary files
+        run: rm -rf temp
+
+      - name: Upload Bootloader
+        uses: actions-js/push@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          message: "Update Bootloader"
+          branch: ${{ github.ref_name }}
